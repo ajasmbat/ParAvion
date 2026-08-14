@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { generateCity } from './city.js';
 import { createCameraController } from './camera.js';
+import { createStorm } from './storm.js';
 
 export const SEED = 1337;
 
@@ -32,6 +33,11 @@ scene.add(city.mesh);
 scene.add(city.ground);
 
 const controls = createCameraController(camera, renderer.domElement);
+const storm = createStorm(scene, camera);
+
+document.addEventListener('keydown', (event) => {
+  if (event.code === 'KeyM') storm.setMuted(!storm.isMuted());
+});
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -49,6 +55,7 @@ let last = performance.now();
 
 function update(dt) {
   controls.update(dt);
+  storm.update(dt);
 }
 
 function render(now) {
@@ -60,10 +67,12 @@ function render(now) {
   if (now - hudLast > 100) {
     hudLast = now;
     const p = camera.position;
+    const stormTag = storm.isInZone() ? (storm.isMuted() ? '⛈ muted' : '⛈ ♪') : (storm.isMuted() ? 'muted' : '♪');
     hud.textContent =
       `pos: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})  ` +
       `alt: ${p.y.toFixed(0)} m  ` +
-      `fps: ${fps.toFixed(0)}`;
+      `fps: ${fps.toFixed(0)}  ` +
+      `[M] ${stormTag}`;
   }
 }
 
