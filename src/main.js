@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { generateCity } from './city.js';
 import { createCameraController } from './camera.js';
+import { createClouds } from './clouds.js';
 
 export const SEED = 1337;
 
@@ -31,6 +32,9 @@ const city = generateCity(SEED);
 scene.add(city.mesh);
 scene.add(city.ground);
 
+const clouds = createClouds(SEED, { camera });
+scene.add(clouds.mesh);
+
 const controls = createCameraController(camera, renderer.domElement);
 
 window.addEventListener('resize', () => {
@@ -49,6 +53,7 @@ let last = performance.now();
 
 function update(dt) {
   controls.update(dt);
+  clouds.update(dt);
 }
 
 function render(now) {
