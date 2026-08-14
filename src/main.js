@@ -6,6 +6,7 @@ import { createClouds } from './clouds.js';
 import { createStorm } from './storm.js';
 import { createAirplane } from './airplane.js';
 import { createModeManager } from './mode-manager.js';
+import { createRadar } from './radar.js';
 
 export const SEED = 1337;
 
@@ -59,6 +60,11 @@ window.addEventListener('resize', () => {
 });
 
 const hud = document.getElementById('hud');
+const radar = createRadar({
+  hudRoot: document.body,
+  getPlanePosition: () => camera.position,
+  getMailboxPosition: () => window.__mailbox.position,
+});
 let fps = 60;
 let hudLast = 0;
 
@@ -70,6 +76,7 @@ function update(dt) {
   modes.update(dt);
   clouds.update(dt);
   storm.update(dt);
+  radar.update(dt);
 }
 
 function render(now) {
