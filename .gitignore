@@ -13,7 +13,9 @@ dist-ssr
 *.local
 
 # Fredrin session runtime (regenerated per worktree)
-.fredrin/
+.fredrin/*
+# …but this bootstrap script IS committed — Fredrin runs it in every new worktree.
+!.fredrin/setup.sh
 
 # Editor directories and files
 .vscode/*
