@@ -21,11 +21,61 @@
         pointer-events: none;
         white-space: pre;
       }
+      #radar {
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        width: 80px;
+        padding: 6px;
+        font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.35);
+        border-radius: 4px;
+        pointer-events: none;
+        text-align: center;
+        transition: background 200ms ease;
+      }
+      #radar .box {
+        position: relative;
+        width: 68px;
+        height: 68px;
+        margin: 0 auto 4px;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        border-radius: 4px;
+      }
+      #radar .box .arrow {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 16px;
+        height: 22px;
+        margin: -11px 0 0 -8px;
+        transform-origin: 50% 50%;
+        will-change: transform;
+      }
+      #radar .box .arrow::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 0;
+        height: 0;
+        border-left: 8px solid transparent;
+        border-right: 8px solid transparent;
+        border-bottom: 22px solid #ffdd55;
+      }
+      #radar .dist { display: block; }
+      #radar.found { background: #1c5c2c; }
+      #radar.found .box .arrow::before { border-bottom-color: #baffb0; }
     </style>
   </head>
   <body>
     <div id="app"></div>
     <div id="hud">pos: (0.0, 0.0, 0.0)  alt: 0 m  fps: 0</div>
+    <div id="radar">
+      <div class="box"><div class="arrow"></div></div>
+      <span class="dist">— m</span>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
