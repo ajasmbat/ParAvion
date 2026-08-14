@@ -214,6 +214,9 @@ export function createStorm(scene, camera, options = {}) {
     isInZone() {
       return inZone;
     },
+    getFlashLevel() {
+      return flashLight.intensity / FLASH_PEAK;
+    },
     dispose() {
       disposed = true;
       cancelPending();
