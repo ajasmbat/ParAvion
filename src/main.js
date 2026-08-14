@@ -9,6 +9,7 @@ import { createAirplane } from './airplane.js';
 import { createModeManager } from './mode-manager.js';
 import { createRadar } from './radar.js';
 import { createCollisionSystem } from './collision.js';
+import { createFlightHud } from './hud-flight.js';
 
 export const SEED = 1337;
 
@@ -86,6 +87,11 @@ const radar = createRadar({
   getPlanePosition: () => camera.position,
   getMailboxPosition: () => window.__mailbox.position,
 });
+const flightHud = createFlightHud({
+  getPose: () => ({ ...airplane.getPose(), throttle: airplane.getThrottle() }),
+  getMode: () => modes.getMode(),
+});
+flightHud.mount(document.body);
 let fps = 60;
 let hudLast = 0;
 
@@ -99,6 +105,7 @@ function update(dt) {
   storm.update(dt);
   clouds.setFlashAmount(storm.getFlashLevel());
   radar.update(dt);
+  flightHud.update(dt);
 }
 
 function render(now) {
