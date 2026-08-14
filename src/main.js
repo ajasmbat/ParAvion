@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { generateCity } from './city.js';
 import { createCameraController } from './camera.js';
+import { createClouds } from './clouds.js';
 import { createStorm } from './storm.js';
 
 export const SEED = 1337;
@@ -32,6 +33,9 @@ const city = generateCity(SEED);
 scene.add(city.mesh);
 scene.add(city.ground);
 
+const clouds = createClouds(SEED, { camera });
+scene.add(clouds.mesh);
+
 const controls = createCameraController(camera, renderer.domElement);
 const storm = createStorm(scene, camera);
 
@@ -55,6 +59,7 @@ let last = performance.now();
 
 function update(dt) {
   controls.update(dt);
+  clouds.update(dt);
   storm.update(dt);
 }
 
