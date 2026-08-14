@@ -2,15 +2,15 @@ import * as THREE from 'three';
 import { mulberry32 } from './rng.js';
 
 const DEFAULTS = {
-  count: 320,
+  count: 750,
   footprint: 2000,
   overhang: 300,
   altitude: 250,
-  thickness: 100,
+  thickness: 260,
   puffSize: 220,
   puffSizeJitter: 0.5,
   driftSpeed: 2,
-  color: 0xe8e8ee,
+  color: 0x2a2a35,
 };
 
 function makePuffTexture() {
