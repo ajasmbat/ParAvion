@@ -8,7 +8,11 @@ const STRIKE_MAX = 8;
 const THUNDER_MIN = 0.6;
 const THUNDER_MAX = 2.5;
 const FLASH_PEAK = 8;
-const FLASH_DECAY = 0.22;
+const FLICKER_COUNT_MIN = 2;
+const FLICKER_COUNT_MAX = 4;
+const FLICKER_TOTAL_MS_MIN = 250;
+const FLICKER_TOTAL_MS_MAX = 400;
+const FILL_RATIO = 0.18;
 const STORM_SEED = 0xa11ce;
 
 export function createStorm(scene, camera, options = {}) {
@@ -28,13 +32,18 @@ export function createStorm(scene, camera, options = {}) {
   scene.add(flashLight);
   scene.add(flashLight.target);
 
+  // Omnidirectional fill so the flicker registers regardless of where the
+  // camera is looking — the directional beam alone misses side/back angles.
+  const fillLight = new THREE.HemisphereLight(0xbfd4ff, 0x202030, 0);
+  scene.add(fillLight);
+
   let inZone = false;
   let timeToNextStrike = 0;
-  let flashIntensity = 0;
   let muted = false;
   let disposed = false;
 
   const pendingThunder = new Set();
+  const pendingFlickers = new Set();
 
   let audioCtx = null;
   const armAudio = () => {
@@ -78,9 +87,75 @@ export function createStorm(scene, camera, options = {}) {
     };
   };
 
+  const playCrack = () => {
+    if (muted || !audioCtx) return;
+    const ctx = audioCtx;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const dur = 0.12 + Math.random() * 0.05;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const bpf = ctx.createBiquadFilter();
+    bpf.type = 'bandpass';
+    bpf.frequency.value = 2500 + Math.random() * 1500;
+    bpf.Q.value = 0.7;
+    const gain = ctx.createGain();
+    const t0 = ctx.currentTime;
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(0.5, t0 + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    src.connect(bpf).connect(gain).connect(ctx.destination);
+    src.start();
+    src.stop(t0 + dur + 0.02);
+    src.onended = () => {
+      try { src.disconnect(); bpf.disconnect(); gain.disconnect(); } catch (_) {}
+    };
+  };
+
+  const setFlashIntensity = (v) => {
+    flashLight.intensity = v;
+    fillLight.intensity = v * FILL_RATIO;
+  };
+
   const fireStrike = () => {
-    flashIntensity = FLASH_PEAK;
-    flashLight.intensity = FLASH_PEAK;
+    const flickerN = FLICKER_COUNT_MIN + Math.floor(rand() * (FLICKER_COUNT_MAX - FLICKER_COUNT_MIN + 1));
+    const totalMs = FLICKER_TOTAL_MS_MIN + rand() * (FLICKER_TOTAL_MS_MAX - FLICKER_TOTAL_MS_MIN);
+    const slotMs = totalMs / flickerN;
+
+    for (let i = 0; i < flickerN; i++) {
+      const jitter = rand() * slotMs * 0.2;
+      const onAt = i * slotMs + jitter;
+      const onDur = slotMs * (0.3 + rand() * 0.35);
+      const peak = FLASH_PEAK * (0.55 + rand() * 0.45);
+
+      const onHandle = setTimeout(() => {
+        pendingFlickers.delete(onHandle);
+        if (disposed) return;
+        setFlashIntensity(peak);
+      }, onAt);
+      pendingFlickers.add(onHandle);
+
+      const offHandle = setTimeout(() => {
+        pendingFlickers.delete(offHandle);
+        if (disposed) return;
+        setFlashIntensity(0);
+      }, onAt + onDur);
+      pendingFlickers.add(offHandle);
+    }
+
+    // Belt-and-suspenders: after the flicker window, force back to zero in case
+    // a slot's off-timer got dropped somehow.
+    const resetHandle = setTimeout(() => {
+      pendingFlickers.delete(resetHandle);
+      if (disposed) return;
+      setFlashIntensity(0);
+    }, totalMs + 20);
+    pendingFlickers.add(resetHandle);
+
+    playCrack();
+
     const delay = THUNDER_MIN + rand() * (THUNDER_MAX - THUNDER_MIN);
     const handle = setTimeout(() => {
       pendingThunder.delete(handle);
@@ -88,12 +163,16 @@ export function createStorm(scene, camera, options = {}) {
       playThunder();
     }, delay * 1000);
     pendingThunder.add(handle);
+
     emit('strike', { intensity: FLASH_PEAK });
   };
 
   const cancelPending = () => {
     for (const h of pendingThunder) clearTimeout(h);
     pendingThunder.clear();
+    for (const h of pendingFlickers) clearTimeout(h);
+    pendingFlickers.clear();
+    setFlashIntensity(0);
   };
 
   const enter = () => {
@@ -122,11 +201,6 @@ export function createStorm(scene, camera, options = {}) {
           scheduleNextStrike();
         }
       }
-
-      if (flashIntensity > 0) {
-        flashIntensity = Math.max(0, flashIntensity - (FLASH_PEAK / FLASH_DECAY) * dt);
-        flashLight.intensity = flashIntensity;
-      }
     },
     on(event, handler) {
       if (handlers[event]) handlers[event].push(handler);
@@ -147,7 +221,9 @@ export function createStorm(scene, camera, options = {}) {
       window.removeEventListener('keydown', onFirstGesture);
       scene.remove(flashLight);
       scene.remove(flashLight.target);
+      scene.remove(fillLight);
       flashLight.dispose?.();
+      fillLight.dispose?.();
       if (audioCtx && audioCtx.state !== 'closed') {
         audioCtx.close().catch(() => {});
       }
