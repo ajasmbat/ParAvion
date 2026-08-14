@@ -42,6 +42,7 @@ export function createStorm(scene, camera, options = {}) {
     const Ctor = window.AudioContext || window.webkitAudioContext;
     if (!Ctor) return;
     audioCtx = new Ctor();
+    audioCtx.resume().catch(() => {});
   };
   const onFirstGesture = () => armAudio();
   window.addEventListener('pointerdown', onFirstGesture);
@@ -54,6 +55,7 @@ export function createStorm(scene, camera, options = {}) {
   const playThunder = () => {
     if (muted || !audioCtx) return;
     const ctx = audioCtx;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     const dur = 1.2 + Math.random() * 1.2;
     const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
     const data = buffer.getChannelData(0);
