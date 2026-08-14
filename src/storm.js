@@ -205,6 +205,9 @@ export function createStorm(scene, camera, options = {}) {
     getStrikeRate() {
       return { min: strikeMin, max: strikeMax };
     },
+    getFlashLevel() {
+      return flashLight.intensity / FLASH_PEAK;
+    },
     dispose() {
       disposed = true;
       cancelPending();

@@ -89,6 +89,7 @@ function update(dt) {
   modes.update(dt);
   clouds.update(dt);
   storm.update(dt);
+  clouds.setFlashAmount(storm.getFlashLevel());
   radar.update(dt);
 }
 
