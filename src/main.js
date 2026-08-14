@@ -3,6 +3,8 @@ import { generateCity } from './city.js';
 import { createCameraController } from './camera.js';
 import { createClouds } from './clouds.js';
 import { createStorm } from './storm.js';
+import { createAirplane } from './airplane.js';
+import { createModeManager } from './mode-manager.js';
 
 export const SEED = 1337;
 
@@ -36,7 +38,9 @@ scene.add(city.ground);
 const clouds = createClouds(SEED, { camera });
 scene.add(clouds.mesh);
 
-const controls = createCameraController(camera, renderer.domElement);
+const flycam = createCameraController(camera, renderer.domElement);
+const airplane = createAirplane(scene);
+const modes = createModeManager({ camera, domElement: renderer.domElement, airplane, flycam });
 const storm = createStorm(scene, camera);
 
 document.addEventListener('keydown', (event) => {
@@ -58,7 +62,7 @@ let acc = 0;
 let last = performance.now();
 
 function update(dt) {
-  controls.update(dt);
+  modes.update(dt);
   clouds.update(dt);
   storm.update(dt);
 }
@@ -73,10 +77,14 @@ function render(now) {
     hudLast = now;
     const p = camera.position;
     const stormTag = storm.isInZone() ? (storm.isMuted() ? '⛈ muted' : '⛈ ♪') : (storm.isMuted() ? 'muted' : '♪');
+    const modeTag = modes.getMode() === 'airplane' ? '✈ airplane' : 'free-roam';
+    const spd = modes.getSpeed();
     hud.textContent =
       `pos: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})  ` +
       `alt: ${p.y.toFixed(0)} m  ` +
+      `spd: ${spd.toFixed(0)} m/s  ` +
       `fps: ${fps.toFixed(0)}  ` +
+      `[C] ${modeTag}  ` +
       `[M] ${stormTag}`;
   }
 }

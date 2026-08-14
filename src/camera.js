@@ -9,6 +9,7 @@ export function createCameraController(camera, domElement) {
   const keys = new Set();
   const euler = new THREE.Euler(0, 0, 0, 'YXZ');
   let initialised = false;
+  let active = true;
 
   const forward = new THREE.Vector3();
   const right = new THREE.Vector3();
@@ -21,6 +22,7 @@ export function createCameraController(camera, domElement) {
   };
 
   const onMouseMove = (event) => {
+    if (!active) return;
     if (!isLocked()) return;
     euler.y -= event.movementX * MOUSE_SENSITIVITY;
     euler.x -= event.movementY * MOUSE_SENSITIVITY;
@@ -29,6 +31,7 @@ export function createCameraController(camera, domElement) {
   };
 
   const onKeyDown = (event) => {
+    if (!active) return;
     if (event.code === 'Space' || event.code === 'ControlLeft' || event.code === 'ControlRight') {
       event.preventDefault();
     }
@@ -51,6 +54,7 @@ export function createCameraController(camera, domElement) {
 
   return {
     update(dt) {
+      if (!active) return;
       if (!initialised) {
         euler.setFromQuaternion(camera.quaternion, 'YXZ');
         if (euler.x > PITCH_LIMIT) euler.x = PITCH_LIMIT;
@@ -80,6 +84,36 @@ export function createCameraController(camera, domElement) {
         move.normalize().multiplyScalar(step);
         camera.position.add(move);
       }
+    },
+
+    setActive(value) {
+      const next = !!value;
+      if (next === active) return;
+      active = next;
+      keys.clear();
+      if (active) {
+        euler.setFromQuaternion(camera.quaternion, 'YXZ');
+        if (euler.x > PITCH_LIMIT) euler.x = PITCH_LIMIT;
+        if (euler.x < -PITCH_LIMIT) euler.x = -PITCH_LIMIT;
+        initialised = true;
+      }
+    },
+
+    isActive() {
+      return active;
+    },
+
+    getPose() {
+      return { position: camera.position, quaternion: camera.quaternion };
+    },
+
+    setPose(position, quaternion) {
+      camera.position.copy(position);
+      camera.quaternion.copy(quaternion);
+      euler.setFromQuaternion(camera.quaternion, 'YXZ');
+      if (euler.x > PITCH_LIMIT) euler.x = PITCH_LIMIT;
+      if (euler.x < -PITCH_LIMIT) euler.x = -PITCH_LIMIT;
+      initialised = true;
     },
 
     dispose() {
