@@ -3,17 +3,20 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 
 const GRAVITY = 6;
-const THRUST_BASE = 30;
-const THRUST_BOOST_ADD = 90;
+const THRUST_BASE = 22;
+const THRUST_BOOST_ADD = 70;
 const DRAG_LINEAR = 0.12;
 const DRAG_QUADRATIC = 0.0022;
+const LIFT_COEFF = 0.0022;
+const LIFT_MAX = 6.3;
 // Lateral (body-X) drag — sideways sliding costs far more than moving forward.
 const DRAG_SIDE_LINEAR = 1.2;
 const DRAG_SIDE_QUADRATIC = 0.022;
 // Yaw restoring torque that swings the nose toward the horizontal velocity vector.
 const WEATHERVANE_STRENGTH = 0.8;
 const WEATHERVANE_REF_SPEED = 20;
-const MOUSE_SENSITIVITY = 0.0016;
+const MOUSE_SENSITIVITY = 0.0014;
+const YAW_MOUSE_FACTOR = 0.3;
 const ROLL_SPEED = 1.6;
 const THROTTLE_RAMP = 0.7;
 const THROTTLE_MIN = 0;
@@ -113,9 +116,11 @@ export function createAirplane(scene, options = {}) {
   }
 
   const noseDir = new THREE.Vector3();
+  const bodyUp = new THREE.Vector3();
   const bodyRightVec = new THREE.Vector3();
   const thrustVec = new THREE.Vector3();
   const dragVec = new THREE.Vector3();
+  const liftVec = new THREE.Vector3();
   const lateralDragVec = new THREE.Vector3();
   const noseHoriz = new THREE.Vector3();
   const velHoriz = new THREE.Vector3();
@@ -161,7 +166,7 @@ export function createAirplane(scene, options = {}) {
       if (input.mouseDX || input.mouseDY) {
         rotDelta.setFromAxisAngle(pitchAxis, -input.mouseDY * MOUSE_SENSITIVITY);
         plane.quaternion.multiply(rotDelta);
-        rotDelta.setFromAxisAngle(yawAxis, -input.mouseDX * MOUSE_SENSITIVITY);
+        rotDelta.setFromAxisAngle(yawAxis, -input.mouseDX * MOUSE_SENSITIVITY * YAW_MOUSE_FACTOR);
         plane.quaternion.multiply(rotDelta);
       }
 
@@ -185,11 +190,15 @@ export function createAirplane(scene, options = {}) {
       const speed = velocity.length();
       dragVec.copy(velocity).multiplyScalar(-(DRAG_LINEAR + DRAG_QUADRATIC * speed));
 
+      bodyUp.set(0, 1, 0).applyQuaternion(plane.quaternion);
+      const liftMag = Math.min(LIFT_COEFF * speed * speed, LIFT_MAX);
+      liftVec.copy(bodyUp).multiplyScalar(liftMag);
+
       const lateralSpeed = velocity.dot(bodyRightVec);
       const lateralMag = -(DRAG_SIDE_LINEAR + DRAG_SIDE_QUADRATIC * Math.abs(lateralSpeed)) * lateralSpeed;
       lateralDragVec.copy(bodyRightVec).multiplyScalar(lateralMag);
 
-      accel.set(0, -GRAVITY, 0).add(thrustVec).add(dragVec).add(lateralDragVec);
+      accel.set(0, -GRAVITY, 0).add(thrustVec).add(dragVec).add(liftVec).add(lateralDragVec);
       velocity.addScaledVector(accel, dt);
       plane.position.addScaledVector(velocity, dt);
 
