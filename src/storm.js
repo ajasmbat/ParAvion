@@ -5,8 +5,6 @@ const ENTER_ALT = 200;
 const EXIT_ALT = 190;
 const STRIKE_MIN = 2;
 const STRIKE_MAX = 8;
-const THUNDER_MIN = 0.6;
-const THUNDER_MAX = 2.5;
 const FLASH_PEAK = 8;
 const FLICKER_COUNT_MIN = 2;
 const FLICKER_COUNT_MAX = 4;
@@ -14,6 +12,7 @@ const FLICKER_TOTAL_MS_MIN = 250;
 const FLICKER_TOTAL_MS_MAX = 400;
 const FILL_RATIO = 0.18;
 const STORM_SEED = 0xa11ce;
+const SAMPLE_URL = '/audio/lightning.mp3';
 
 export function createStorm(scene, camera, options = {}) {
   const seed = options.seed ?? STORM_SEED;
@@ -42,76 +41,60 @@ export function createStorm(scene, camera, options = {}) {
   let muted = false;
   let disposed = false;
 
-  const pendingThunder = new Set();
+  let strikeMin = STRIKE_MIN;
+  let strikeMax = STRIKE_MAX;
+
+  const pendingTimers = new Set();
+  const pendingSources = new Set();
   const pendingFlickers = new Set();
 
   let audioCtx = null;
+  let sampleBuffer = null;
+  let sampleLoading = null;
+
+  const loadSample = () => {
+    if (sampleBuffer || sampleLoading || !audioCtx) return;
+    const ctx = audioCtx;
+    sampleLoading = fetch(SAMPLE_URL)
+      .then((r) => r.arrayBuffer())
+      .then((buf) => new Promise((resolve, reject) => ctx.decodeAudioData(buf, resolve, reject)))
+      .then((decoded) => { sampleBuffer = decoded; })
+      .catch(() => {})
+      .finally(() => { sampleLoading = null; });
+  };
+
   const armAudio = () => {
     if (audioCtx || disposed) return;
     const Ctor = window.AudioContext || window.webkitAudioContext;
     if (!Ctor) return;
     audioCtx = new Ctor();
     audioCtx.resume().catch(() => {});
+    loadSample();
   };
   const onFirstGesture = () => armAudio();
   window.addEventListener('pointerdown', onFirstGesture);
   window.addEventListener('keydown', onFirstGesture);
 
   const scheduleNextStrike = () => {
-    timeToNextStrike = STRIKE_MIN + rand() * (STRIKE_MAX - STRIKE_MIN);
+    timeToNextStrike = strikeMin + rand() * (strikeMax - strikeMin);
   };
 
-  const playThunder = () => {
-    if (muted || !audioCtx) return;
+  const playSample = (gain = 1, when = 0) => {
+    if (muted || !audioCtx || !sampleBuffer) return null;
     const ctx = audioCtx;
     if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-    const dur = 1.2 + Math.random() * 1.2;
-    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
     const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    const lpf = ctx.createBiquadFilter();
-    lpf.type = 'lowpass';
-    lpf.frequency.value = 200 + Math.random() * 300;
-    const gain = ctx.createGain();
-    const t0 = ctx.currentTime;
-    gain.gain.setValueAtTime(0, t0);
-    gain.gain.linearRampToValueAtTime(0.6, t0 + 0.15);
-    gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-    src.connect(lpf).connect(gain).connect(ctx.destination);
-    src.start();
-    src.stop(t0 + dur + 0.05);
+    src.buffer = sampleBuffer;
+    const g = ctx.createGain();
+    g.gain.value = gain;
+    src.connect(g).connect(ctx.destination);
+    src.start(ctx.currentTime + when);
+    pendingSources.add(src);
     src.onended = () => {
-      try { src.disconnect(); lpf.disconnect(); gain.disconnect(); } catch (_) {}
+      pendingSources.delete(src);
+      try { src.disconnect(); g.disconnect(); } catch (_) {}
     };
-  };
-
-  const playCrack = () => {
-    if (muted || !audioCtx) return;
-    const ctx = audioCtx;
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-    const dur = 0.12 + Math.random() * 0.05;
-    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    const bpf = ctx.createBiquadFilter();
-    bpf.type = 'bandpass';
-    bpf.frequency.value = 2500 + Math.random() * 1500;
-    bpf.Q.value = 0.7;
-    const gain = ctx.createGain();
-    const t0 = ctx.currentTime;
-    gain.gain.setValueAtTime(0, t0);
-    gain.gain.linearRampToValueAtTime(0.5, t0 + 0.005);
-    gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-    src.connect(bpf).connect(gain).connect(ctx.destination);
-    src.start();
-    src.stop(t0 + dur + 0.02);
-    src.onended = () => {
-      try { src.disconnect(); bpf.disconnect(); gain.disconnect(); } catch (_) {}
-    };
+    return src;
   };
 
   const setFlashIntensity = (v) => {
@@ -154,22 +137,23 @@ export function createStorm(scene, camera, options = {}) {
     }, totalMs + 20);
     pendingFlickers.add(resetHandle);
 
-    playCrack();
-
-    const delay = THUNDER_MIN + rand() * (THUNDER_MAX - THUNDER_MIN);
-    const handle = setTimeout(() => {
-      pendingThunder.delete(handle);
-      if (!inZone || disposed) return;
-      playThunder();
-    }, delay * 1000);
-    pendingThunder.add(handle);
+    // Play the mp3 once at strike onset. The sample already contains both the
+    // crack and the rumble, so a second delayed playback would double-echo.
+    // Kept the pendingTimers/pendingSources machinery so we can flip back to a
+    // second delayed playback with one line if desired.
+    playSample(1.0, 0);
 
     emit('strike', { intensity: FLASH_PEAK });
   };
 
   const cancelPending = () => {
-    for (const h of pendingThunder) clearTimeout(h);
-    pendingThunder.clear();
+    for (const h of pendingTimers) clearTimeout(h);
+    pendingTimers.clear();
+    for (const src of pendingSources) {
+      try { src.stop(); } catch (_) {}
+      try { src.disconnect(); } catch (_) {}
+    }
+    pendingSources.clear();
     for (const h of pendingFlickers) clearTimeout(h);
     pendingFlickers.clear();
     setFlashIntensity(0);
@@ -213,6 +197,13 @@ export function createStorm(scene, camera, options = {}) {
     },
     isInZone() {
       return inZone;
+    },
+    setStrikeRate(min, max) {
+      strikeMin = Math.max(0.2, min);
+      strikeMax = Math.max(strikeMin + 0.1, max);
+    },
+    getStrikeRate() {
+      return { min: strikeMin, max: strikeMax };
     },
     dispose() {
       disposed = true;

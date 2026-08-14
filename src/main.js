@@ -53,6 +53,19 @@ document.addEventListener('keydown', (event) => {
   if (event.code === 'KeyM') storm.setMuted(!storm.isMuted());
 });
 
+const rateInput = document.getElementById('rate');
+const applyRate = () => {
+  // t=0 → calm (12–18s between strikes); t=1 → intense (~0.48–0.72s).
+  // Exponential curve gives finer control near the calm end, where a linear
+  // slider would feel unresponsive.
+  const t = parseFloat(rateInput.value);
+  const min = 12 * Math.pow(0.04, t);
+  const max = 18 * Math.pow(0.04, t);
+  storm.setStrikeRate(min, max);
+};
+rateInput.addEventListener('input', applyRate);
+applyRate();
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
