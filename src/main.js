@@ -8,6 +8,7 @@ import { createStorm } from './storm.js';
 import { createAirplane } from './airplane.js';
 import { createModeManager } from './mode-manager.js';
 import { createRadar } from './radar.js';
+import { createCollisionSystem } from './collision.js';
 
 export const SEED = 1337;
 
@@ -52,7 +53,8 @@ scene.add(clouds.mesh);
 
 const flycam = createCameraController(camera, renderer.domElement);
 const airplane = createAirplane(scene);
-const modes = createModeManager({ scene, camera, domElement: renderer.domElement, airplane, flycam });
+const collision = createCollisionSystem({ buildings: city.buildings });
+const modes = createModeManager({ scene, camera, domElement: renderer.domElement, airplane, flycam, collision });
 const storm = createStorm(scene, camera);
 
 document.addEventListener('keydown', (event) => {

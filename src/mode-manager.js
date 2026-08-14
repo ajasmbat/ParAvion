@@ -6,7 +6,7 @@ const LOOK_AHEAD = 20;
 const CHASE_LERP_PER_60HZ_FRAME = 0.12;
 const SPAWN_FORWARD_OFFSET = 30;
 
-export function createModeManager({ scene, camera, domElement, airplane, flycam }) {
+export function createModeManager({ scene, camera, domElement, airplane, flycam, collision }) {
   let mode = 'flycam';
   const keys = new Set();
   const mouseButtons = new Set();
@@ -80,6 +80,7 @@ export function createModeManager({ scene, camera, domElement, airplane, flycam 
   function setMode(next) {
     if (next === mode) return;
     if (next === 'airplane') {
+      if (airplane.isCrashed && airplane.isCrashed()) airplane.respawn();
       const camPose = flycam.getPose();
       spawnForward.set(0, 0, -SPAWN_FORWARD_OFFSET).applyQuaternion(camPose.quaternion);
       const spawnPos = camPose.position.clone().add(spawnForward);
@@ -114,7 +115,7 @@ export function createModeManager({ scene, camera, domElement, airplane, flycam 
       }
 
       const boost = keys.has('ShiftLeft') || keys.has('ShiftRight');
-      airplane.update(dt, { keys, mouseDX, mouseDY, boost });
+      airplane.update(dt, { keys, mouseDX, mouseDY, boost }, collision);
       mouseDX = 0;
       mouseDY = 0;
 
