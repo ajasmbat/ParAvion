@@ -13,6 +13,10 @@ const THROTTLE_RAMP = 0.7;
 const THROTTLE_MIN = 0;
 const THROTTLE_MAX = 1;
 const INITIAL_THROTTLE = 0.6;
+const CRASH_HOLD_MS = 1000;
+
+const RESPAWN_POSITION = new THREE.Vector3(0, 400, 0);
+const RESPAWN_QUATERNION = new THREE.Quaternion();
 
 const MODEL_URL = '/models/mustang.glb';
 const DRACO_DECODER = 'https://www.gstatic.com/draco/versioned/decoders/1.5.6/';
@@ -84,6 +88,23 @@ export function createAirplane(scene, options = {}) {
 
   const velocity = new THREE.Vector3();
   let throttle = INITIAL_THROTTLE;
+  let crashed = false;
+  let crashedAt = 0;
+  let toastEl = null;
+
+  function ensureToast() {
+    if (toastEl) return toastEl;
+    if (typeof document === 'undefined') return null;
+    toastEl = document.getElementById('toast');
+    return toastEl;
+  }
+
+  function setToast(text) {
+    const el = ensureToast();
+    if (!el) return;
+    el.textContent = text;
+    el.style.display = text ? 'block' : 'none';
+  }
 
   const noseDir = new THREE.Vector3();
   const thrustVec = new THREE.Vector3();
@@ -94,11 +115,36 @@ export function createAirplane(scene, options = {}) {
   const yawAxis = new THREE.Vector3(0, 1, 0);
   const rollAxis = new THREE.Vector3(0, 0, 1);
 
+  function crash() {
+    if (crashed) return;
+    crashed = true;
+    crashedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    velocity.set(0, 0, 0);
+    plane.visible = false;
+    setToast('CRASHED');
+  }
+
+  function respawn() {
+    plane.position.copy(RESPAWN_POSITION);
+    plane.quaternion.copy(RESPAWN_QUATERNION);
+    velocity.set(0, 0, 0);
+    throttle = INITIAL_THROTTLE;
+    plane.visible = true;
+    crashed = false;
+    setToast('');
+  }
+
   return {
     mesh: plane,
     ready,
 
-    update(dt, input) {
+    update(dt, input, collision) {
+      if (crashed) {
+        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        if (now - crashedAt >= CRASH_HOLD_MS) respawn();
+        return;
+      }
+
       const keys = input.keys;
 
       if (input.mouseDX || input.mouseDY) {
@@ -130,7 +176,16 @@ export function createAirplane(scene, options = {}) {
       accel.set(0, -GRAVITY, 0).add(thrustVec).add(dragVec);
       velocity.addScaledVector(accel, dt);
       plane.position.addScaledVector(velocity, dt);
+
+      if (collision) {
+        const hit = collision.check(plane.position);
+        if (hit) crash();
+      }
     },
+
+    crash,
+    respawn,
+    isCrashed: () => crashed,
 
     getPose() {
       return { position: plane.position, quaternion: plane.quaternion, velocity };
