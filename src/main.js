@@ -52,7 +52,7 @@ scene.add(clouds.mesh);
 
 const flycam = createCameraController(camera, renderer.domElement);
 const airplane = createAirplane(scene);
-const modes = createModeManager({ camera, domElement: renderer.domElement, airplane, flycam });
+const modes = createModeManager({ scene, camera, domElement: renderer.domElement, airplane, flycam });
 const storm = createStorm(scene, camera);
 
 document.addEventListener('keydown', (event) => {
