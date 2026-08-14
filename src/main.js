@@ -1,41 +1,36 @@
 import * as THREE from 'three';
-import { mulberry32 } from './rng.js';
 import { generateCity } from './city.js';
 import { createCameraController } from './camera.js';
 
 export const SEED = 1337;
 
-const SKY = 0x87ceeb;
+// Sky + fog share this exact hex to avoid a visible horizon seam.
+const SKY = 0x9ec7e8;
+const FOG_DENSITY = 0.0008;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.FogExp2(SKY, FOG_DENSITY);
 
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 5000);
-camera.position.set(0, 30, 60);
-camera.lookAt(0, 20, 0);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 4000);
+camera.position.set(0, 400, 0);
+camera.lookAt(new THREE.Vector3(0, 0, 0));
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.getElementById('app').appendChild(renderer.domElement);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 const sun = new THREE.DirectionalLight(0xffffff, 0.9);
 sun.position.set(200, 400, 150);
+sun.castShadow = false;
 scene.add(sun);
 
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(4000, 4000),
-  new THREE.MeshLambertMaterial({ color: 0x3a5a3a }),
-);
-ground.rotation.x = -Math.PI / 2;
-scene.add(ground);
-
-// Ticket PARA-Y6KLG7 only wires the stubs. City + camera come from siblings.
-const rng = mulberry32(SEED);
-void rng;
 const city = generateCity(SEED);
-if (city.mesh) scene.add(city.mesh);
+scene.add(city.mesh);
+scene.add(city.ground);
+
 const controls = createCameraController(camera, renderer.domElement);
 
 window.addEventListener('resize', () => {
@@ -44,13 +39,43 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Basic rAF loop. PARA-ME3QRO replaces this with a fixed-timestep accumulator.
+const hud = document.getElementById('hud');
+let fps = 60;
+let hudLast = 0;
+
+const STEP = 1 / 60;
+let acc = 0;
 let last = performance.now();
-function frame(now) {
-  const dt = (now - last) / 1000;
-  last = now;
+
+function update(dt) {
   controls.update(dt);
+}
+
+function render(now) {
+  const rawDt = (now - last) / 1000;
+  if (rawDt > 0) fps = fps * 0.95 + (1 / rawDt) * 0.05;
+
   renderer.render(scene, camera);
+
+  if (now - hudLast > 100) {
+    hudLast = now;
+    const p = camera.position;
+    hud.textContent =
+      `pos: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})  ` +
+      `alt: ${p.y.toFixed(0)} m  ` +
+      `fps: ${fps.toFixed(0)}`;
+  }
+}
+
+function frame(now) {
   requestAnimationFrame(frame);
+  const dt = Math.min((now - last) / 1000, 0.25);
+  last = now;
+  acc += dt;
+  while (acc >= STEP) {
+    update(STEP);
+    acc -= STEP;
+  }
+  render(now);
 }
 requestAnimationFrame(frame);
