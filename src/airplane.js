@@ -7,6 +7,12 @@ const THRUST_BASE = 30;
 const THRUST_BOOST_ADD = 90;
 const DRAG_LINEAR = 0.12;
 const DRAG_QUADRATIC = 0.0022;
+// Lateral (body-X) drag — sideways sliding costs far more than moving forward.
+const DRAG_SIDE_LINEAR = 1.2;
+const DRAG_SIDE_QUADRATIC = 0.022;
+// Yaw restoring torque that swings the nose toward the horizontal velocity vector.
+const WEATHERVANE_STRENGTH = 0.8;
+const WEATHERVANE_REF_SPEED = 20;
 const MOUSE_SENSITIVITY = 0.0016;
 const ROLL_SPEED = 1.6;
 const THROTTLE_RAMP = 0.7;
@@ -107,8 +113,13 @@ export function createAirplane(scene, options = {}) {
   }
 
   const noseDir = new THREE.Vector3();
+  const bodyRightVec = new THREE.Vector3();
   const thrustVec = new THREE.Vector3();
   const dragVec = new THREE.Vector3();
+  const lateralDragVec = new THREE.Vector3();
+  const noseHoriz = new THREE.Vector3();
+  const velHoriz = new THREE.Vector3();
+  const crossTmp = new THREE.Vector3();
   const accel = new THREE.Vector3();
   const rotDelta = new THREE.Quaternion();
   const pitchAxis = new THREE.Vector3(1, 0, 0);
@@ -167,15 +178,38 @@ export function createAirplane(scene, options = {}) {
       if (keys.has('KeyS')) throttle = Math.max(THROTTLE_MIN, throttle - THROTTLE_RAMP * dt);
 
       noseDir.set(0, 0, -1).applyQuaternion(plane.quaternion);
+      bodyRightVec.set(1, 0, 0).applyQuaternion(plane.quaternion);
       const thrustMag = (THRUST_BASE + (input.boost ? THRUST_BOOST_ADD : 0)) * throttle;
       thrustVec.copy(noseDir).multiplyScalar(thrustMag);
 
       const speed = velocity.length();
       dragVec.copy(velocity).multiplyScalar(-(DRAG_LINEAR + DRAG_QUADRATIC * speed));
 
-      accel.set(0, -GRAVITY, 0).add(thrustVec).add(dragVec);
+      const lateralSpeed = velocity.dot(bodyRightVec);
+      const lateralMag = -(DRAG_SIDE_LINEAR + DRAG_SIDE_QUADRATIC * Math.abs(lateralSpeed)) * lateralSpeed;
+      lateralDragVec.copy(bodyRightVec).multiplyScalar(lateralMag);
+
+      accel.set(0, -GRAVITY, 0).add(thrustVec).add(dragVec).add(lateralDragVec);
       velocity.addScaledVector(accel, dt);
       plane.position.addScaledVector(velocity, dt);
+
+      const horizSpeed = Math.hypot(velocity.x, velocity.z);
+      if (horizSpeed > 1e-3) {
+        noseHoriz.set(noseDir.x, 0, noseDir.z);
+        const noseHorizLen = noseHoriz.length();
+        if (noseHorizLen > 1e-3) {
+          noseHoriz.multiplyScalar(1 / noseHorizLen);
+          velHoriz.set(velocity.x / horizSpeed, 0, velocity.z / horizSpeed);
+          const cosA = noseHoriz.dot(velHoriz);
+          crossTmp.crossVectors(noseHoriz, velHoriz);
+          const yawErr = Math.atan2(crossTmp.y, cosA);
+          const speedScale = Math.min(horizSpeed / WEATHERVANE_REF_SPEED, 1);
+          const yawStep = yawErr * WEATHERVANE_STRENGTH * speedScale * dt;
+          if (Math.abs(yawStep) > 1e-6) {
+            plane.rotateOnWorldAxis(yawAxis, yawStep);
+          }
+        }
+      }
 
       if (collision) {
         const hit = collision.check(plane.position);
