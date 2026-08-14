@@ -15,6 +15,11 @@ dist-ssr
 # Fredrin session runtime (regenerated per worktree)
 .fredrin/
 
+# Raw 3D source assets — commit only the optimized .glb, never the sources
+*.obj
+*.fbx
+Meshy_AI_*.zip
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

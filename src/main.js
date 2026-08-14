@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { generateCity } from './city.js';
 import { createCameraController } from './camera.js';
 import { createClouds } from './clouds.js';
@@ -24,6 +25,11 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.getElementById('app').appendChild(renderer.domElement);
+
+// PBR reflection env for MeshStandardMaterial (the airplane); city/clouds
+// use Lambert/Basic and are unaffected.
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 const sun = new THREE.DirectionalLight(0xffffff, 0.9);
