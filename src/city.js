@@ -20,6 +20,18 @@ const GROUND_COLOR = 0x2a2a2a;
 const BASE_COLOR = [0.784, 0.784, 0.784]; // ~#c8c8c8
 const COLOR_JITTER = 0.15;
 
+// Emissive window strip params — tuned in world metres so building size
+// doesn't distort the storey spacing. Windows fill the top WINDOW_BAND_FRAC
+// of each ROW_HEIGHT band and are gated to the top of the ground floor
+// (WINDOW_MIN_Y) so the base doesn't smear into the ground plane.
+const ROW_HEIGHT = 3.5;
+const COL_WIDTH = 4.0;
+const WINDOW_BAND_FRAC = 0.45;
+const LIT_PROBABILITY = 0.55;
+const WINDOW_MIN_Y = 3.0;
+const WINDOW_COLOR = 0xffd39a;
+const WINDOW_INTENSITY = 0.75;
+
 /**
  * Generate a deterministic 2km x 2km procedural city as a single InstancedMesh.
  * Returns `{ mesh, buildings, ground }` — `ground` is a separate mesh so main.js
@@ -94,6 +106,7 @@ export function generateCity(seed) {
 
   const geometry = new THREE.BoxGeometry(1, 1, 1);
   const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+  installWindowShader(material);
   const mesh = new THREE.InstancedMesh(geometry, material, buildings.length);
 
   const matrix = new THREE.Matrix4();
@@ -112,6 +125,13 @@ export function generateCity(seed) {
   mesh.instanceColor = colorAttr;
   mesh.instanceMatrix.needsUpdate = true;
 
+  // Independent PRNG stream so adding this attribute doesn't perturb the
+  // geometry/colour sequence consumed by `rand` above.
+  const seedRand = mulberry32((seed + 0x9e3779b9) | 0);
+  const windowSeeds = new Float32Array(buildings.length);
+  for (let i = 0; i < buildings.length; i++) windowSeeds[i] = seedRand();
+  geometry.setAttribute('aWindowSeed', new THREE.InstancedBufferAttribute(windowSeeds, 1));
+
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(CITY_SIZE, CITY_SIZE),
     new THREE.MeshLambertMaterial({ color: GROUND_COLOR }),
@@ -119,4 +139,89 @@ export function generateCity(seed) {
   ground.rotation.x = -Math.PI / 2;
 
   return { mesh, buildings, ground };
+}
+
+/**
+ * Extends the InstancedMesh's MeshLambertMaterial with procedural emissive
+ * window strips on the four side faces. Per-instance variation is driven by
+ * an `aWindowSeed` InstancedBufferAttribute. Uses `onBeforeCompile` so the
+ * material keeps responding to DirectionalLight + AmbientLight and to scene
+ * fog — dropping to a raw ShaderMaterial would lose both.
+ */
+function installWindowShader(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uRowHeight = { value: ROW_HEIGHT };
+    shader.uniforms.uColWidth = { value: COL_WIDTH };
+    shader.uniforms.uWindowBandFrac = { value: WINDOW_BAND_FRAC };
+    shader.uniforms.uLitProbability = { value: LIT_PROBABILITY };
+    shader.uniforms.uWindowMinY = { value: WINDOW_MIN_Y };
+    shader.uniforms.uWindowColor = { value: new THREE.Color(WINDOW_COLOR) };
+    shader.uniforms.uWindowIntensity = { value: WINDOW_INTENSITY };
+
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        attribute float aWindowSeed;
+        varying vec3 vWinWorldPos;
+        varying vec3 vWinObjNormal;
+        varying float vWinSeed;`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vWinObjNormal = normal;
+        vWinSeed = aWindowSeed;
+        vWinWorldPos = (modelMatrix * instanceMatrix * vec4(position, 1.0)).xyz;`
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        uniform float uRowHeight;
+        uniform float uColWidth;
+        uniform float uWindowBandFrac;
+        uniform float uLitProbability;
+        uniform float uWindowMinY;
+        uniform vec3 uWindowColor;
+        uniform float uWindowIntensity;
+        varying vec3 vWinWorldPos;
+        varying vec3 vWinObjNormal;
+        varying float vWinSeed;
+        float winHash(float x, float s) {
+          return fract(sin(x * 12.9898 + s * 78.233) * 43758.5453);
+        }`
+      )
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        // Side faces only (skip roofs/undersides) and above the ground band.
+        if (abs(vWinObjNormal.y) < 0.5 && vWinWorldPos.y > uWindowMinY) {
+          float y = vWinWorldPos.y / uRowHeight;
+          float rowFrac = fract(y);
+          float rowIdx = floor(y);
+          float bandMask = step(1.0 - uWindowBandFrac, rowFrac);
+
+          // Horizontal coordinate along the wall's tangent (x on +/-z faces,
+          // z on +/-x faces). Offset per-building so column phase varies.
+          float horiz = vWinWorldPos.x * abs(vWinObjNormal.z)
+                      + vWinWorldPos.z * abs(vWinObjNormal.x);
+          horiz += vWinSeed * 17.0;
+          float colIdx = floor(horiz / uColWidth);
+
+          float litRand = winHash(colIdx + rowIdx * 91.7, vWinSeed);
+          float lit = step(1.0 - uLitProbability, litRand);
+
+          // Per-instance warm-white with small hue jitter.
+          vec3 col = uWindowColor + vec3(
+            (vWinSeed - 0.5) * 0.10,
+            (fract(vWinSeed * 3.13) - 0.5) * 0.08,
+            0.0
+          );
+
+          totalEmissiveRadiance += col * uWindowIntensity * bandMask * lit;
+        }`
+      );
+  };
 }
