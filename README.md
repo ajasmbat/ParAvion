@@ -4,15 +4,52 @@ Minimal Three.js flight-game prototype (Vite + vanilla JS). Fly a free camera
 through a deterministically-generated 2 km &times; 2 km city rendered as a
 single `InstancedMesh`.
 
-## Run
+## Running locally
+
+### Prerequisites
+
+- **Node.js** `^20.19` or `>=22.12` (required by Vite 8) &mdash; check with `node -v`
+- **npm** (ships with Node)
+
+No environment variables, database, or API keys are needed &mdash; everything is
+static and generated in the browser.
+
+### 1. Install dependencies
 
 ```bash
 npm install
+```
+
+### 2. Start the dev server
+
+```bash
 npm run dev
 ```
 
-Open the printed URL in a browser, click the canvas to lock the pointer, and
-fly.
+Vite serves the app at **http://localhost:5173** and prints the URL it picked
+(if 5173 is already taken it falls back to the next free port, so trust the
+printed line). Pass `--port` to pin it:
+
+```bash
+npm run dev -- --port 3000
+```
+
+To reach the server from another device on your network, add `--host`.
+
+### 3. Open it
+
+Open http://localhost:5173 in a browser, click the canvas to lock the pointer,
+and fly. Edits to files under `src/` hot-reload; changing `SEED` (see below)
+needs a page reload.
+
+Stop the server with `Ctrl+C`.
+
+### Production build
+
+```bash
+npm run build     # bundles to dist/
+npm run preview   # serves dist/ at http://localhost:4173
+```
 
 ## Controls
 
