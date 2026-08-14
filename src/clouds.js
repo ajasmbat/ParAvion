@@ -66,9 +66,12 @@ export function createClouds(seed, options) {
 
   const texture = makePuffTexture();
   const geometry = new THREE.PlaneGeometry(1, 1);
+  const baseColor = new THREE.Color(cfg.color);
+  const flashColor = new THREE.Color(0xffffff);
+  const tmpColor = new THREE.Color();
   const material = new THREE.MeshBasicMaterial({
     map: texture,
-    color: cfg.color,
+    color: baseColor.clone(),
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -112,6 +115,11 @@ export function createClouds(seed, options) {
     update(dt) {
       elapsed += dt;
       writeMatrices();
+    },
+    setFlashAmount(amount) {
+      const a = Math.max(0, Math.min(1, amount));
+      tmpColor.copy(baseColor).lerp(flashColor, a);
+      material.color.copy(tmpColor);
     },
     dispose() {
       geometry.dispose();
