@@ -22,6 +22,9 @@ dist-ssr
 *.fbx
 Meshy_AI_*.zip
 
+# HTML concept mockups — uploaded to Fredrin as ticket artifacts, not shipped code
+mocks/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
