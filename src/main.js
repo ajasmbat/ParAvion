@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { generateCity } from './city.js';
+import { spawnMailbox } from './mailbox.js';
 import { createCameraController } from './camera.js';
 import { createClouds } from './clouds.js';
 import { createStorm } from './storm.js';
@@ -34,6 +35,10 @@ scene.add(sun);
 const city = generateCity(SEED);
 scene.add(city.mesh);
 scene.add(city.ground);
+
+const mailbox = spawnMailbox(SEED, city.buildings);
+scene.add(mailbox.mesh);
+window.__mailbox = mailbox;
 
 const clouds = createClouds(SEED, { camera });
 scene.add(clouds.mesh);
