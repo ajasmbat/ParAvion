@@ -44,6 +44,7 @@ scene.add(sun);
 const city = generateCity(SEED);
 scene.add(city.mesh);
 scene.add(city.ground);
+for (const detailMesh of city.detailMeshes) scene.add(detailMesh);
 
 const mailbox = spawnMailbox(SEED, city.buildings);
 scene.add(mailbox.mesh);
