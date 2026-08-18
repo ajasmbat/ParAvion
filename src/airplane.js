@@ -18,6 +18,14 @@ const WEATHERVANE_REF_SPEED = 20;
 const MOUSE_SENSITIVITY = 0.0014;
 const YAW_MOUSE_FACTOR = 0.3;
 const ROLL_SPEED = 1.6;
+// Propeller torque effects. The Merlin's prop spins clockwise from the pilot's
+// seat, so the reaction torque rolls the airframe LEFT while power is up.
+// PROP_DIRECTION = 1 encodes that; -1 flips all three effects at once.
+const PROP_DIRECTION = 1;
+const TORQUE_ROLL_BASE = 0.24; // rad/s roll at full throttle, no boost (~15% of ROLL_SPEED to counter)
+const TORQUE_BOOST_MULT = 1.5;
+const P_FACTOR_STRENGTH = 0.5; // rad/s yaw at full throttle and 90° AoA
+const GYRO_STRENGTH = 0.15; // fraction of pitch/yaw input cross-coupled into the other axis
 const THROTTLE_RAMP = 0.7;
 const THROTTLE_MIN = 0;
 const THROTTLE_MAX = 1;
@@ -125,6 +133,8 @@ export function createAirplane(scene, options = {}) {
   const noseHoriz = new THREE.Vector3();
   const velHoriz = new THREE.Vector3();
   const crossTmp = new THREE.Vector3();
+  const velBody = new THREE.Vector3();
+  const invQuat = new THREE.Quaternion();
   const accel = new THREE.Vector3();
   const rotDelta = new THREE.Quaternion();
   const pitchAxis = new THREE.Vector3(1, 0, 0);
@@ -163,10 +173,12 @@ export function createAirplane(scene, options = {}) {
 
       const keys = input.keys;
 
-      if (input.mouseDX || input.mouseDY) {
-        rotDelta.setFromAxisAngle(pitchAxis, -input.mouseDY * MOUSE_SENSITIVITY);
+      const pitchInput = -input.mouseDY * MOUSE_SENSITIVITY; // + = nose up
+      const yawInput = -input.mouseDX * MOUSE_SENSITIVITY * YAW_MOUSE_FACTOR; // + = nose left
+      if (pitchInput || yawInput) {
+        rotDelta.setFromAxisAngle(pitchAxis, pitchInput);
         plane.quaternion.multiply(rotDelta);
-        rotDelta.setFromAxisAngle(yawAxis, -input.mouseDX * MOUSE_SENSITIVITY * YAW_MOUSE_FACTOR);
+        rotDelta.setFromAxisAngle(yawAxis, yawInput);
         plane.quaternion.multiply(rotDelta);
       }
 
@@ -181,6 +193,35 @@ export function createAirplane(scene, options = {}) {
 
       if (keys.has('KeyW')) throttle = Math.min(THROTTLE_MAX, throttle + THROTTLE_RAMP * dt);
       if (keys.has('KeyS')) throttle = Math.max(THROTTLE_MIN, throttle - THROTTLE_RAMP * dt);
+
+      // Propeller torque — a dead engine has no torque, so everything gates on throttle.
+      if (throttle > 0) {
+        // Engine roll: reaction to the prop rolls the airframe left; boost digs in harder.
+        const boostMult = input.boost ? TORQUE_BOOST_MULT : 1;
+        rotDelta.setFromAxisAngle(rollAxis, PROP_DIRECTION * TORQUE_ROLL_BASE * throttle * boostMult * dt);
+        plane.quaternion.multiply(rotDelta);
+
+        // P-factor: at positive AoA the descending (right) blade bites more air → yaw left.
+        invQuat.copy(plane.quaternion).invert();
+        velBody.copy(velocity).applyQuaternion(invQuat);
+        if (-velBody.z > 1e-3) {
+          const aoa = Math.atan2(-velBody.y, -velBody.z);
+          if (aoa > 0) {
+            rotDelta.setFromAxisAngle(yawAxis, PROP_DIRECTION * P_FACTOR_STRENGTH * throttle * Math.sin(aoa) * dt);
+            plane.quaternion.multiply(rotDelta);
+          }
+        }
+
+        // Gyroscopic precession: the spinning prop turns pitch input into yaw
+        // (nose up → yaw right) and yaw input into pitch (nose left → pitch up).
+        if (pitchInput || yawInput) {
+          const gyro = PROP_DIRECTION * GYRO_STRENGTH * throttle;
+          rotDelta.setFromAxisAngle(yawAxis, -gyro * pitchInput);
+          plane.quaternion.multiply(rotDelta);
+          rotDelta.setFromAxisAngle(pitchAxis, gyro * yawInput);
+          plane.quaternion.multiply(rotDelta);
+        }
+      }
 
       noseDir.set(0, 0, -1).applyQuaternion(plane.quaternion);
       bodyRightVec.set(1, 0, 0).applyQuaternion(plane.quaternion);
