@@ -14,7 +14,7 @@ export function createModeManager({ scene, camera, domElement, airplane, flycam,
   let mouseDY = 0;
 
   const isLocked = () => document.pointerLockElement === domElement;
-  const guns = createGuns(scene, airplane, camera);
+  const guns = createGuns(scene, airplane, camera, collision);
 
   const onKeyDown = (event) => {
     if (event.code === 'KeyC') {
