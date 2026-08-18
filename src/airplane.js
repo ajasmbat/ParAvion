@@ -3,12 +3,35 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 
 const GRAVITY = 6;
-const THRUST_BASE = 22;
-const THRUST_BOOST_ADD = 70;
-const DRAG_LINEAR = 0.12;
-const DRAG_QUADRATIC = 0.0022;
+// Thrust/drag retuned together with the AoA lift model: with the old
+// DRAG_LINEAR of 0.12, drag at glide speed roughly equals gravity, so no lift
+// model can reach a 5:1 glide. These values keep the old speed envelope
+// (default-throttle cruise ~60 m/s, full throttle ~83, boost ~190).
+const THRUST_BASE = 2.2;
+const THRUST_BOOST_ADD = 7;
+const DRAG_LINEAR = 0.01;
+const DRAG_QUADRATIC = 0.0002;
 const LIFT_COEFF = 0.0022;
-const LIFT_MAX = 6.3;
+// Angle-of-attack lift: Cl grows linearly with AoA up to the stall angle.
+// CL_ZERO is picked so nose-level flight at full-throttle speed sits at its
+// lift equilibrium.
+const CL_ZERO = 0.4;
+const CL_SLOPE = Math.PI * 2;
+// Stall hysteresis: past STALL_AOA the flow separates and lift collapses to
+// STALL_CL_BROKEN; it stays broken until AoA falls back below REATTACH_AOA.
+// Without the hysteresis the nose-drop moment would park the wing right at
+// STALL_AOA — which is peak lift, not a stall.
+const STALL_AOA = THREE.MathUtils.degToRad(14);
+const REATTACH_AOA = THREE.MathUtils.degToRad(8);
+const STALL_CL_BROKEN = 0.2;
+// While stalled the wing stops holding the nose up — it gets pulled toward
+// the velocity vector, faster the deeper the AoA.
+const STALL_PITCH_RATE = 0.9;
+const STALL_PITCH_RAMP = THREE.MathUtils.degToRad(10);
+// Not a flight-envelope limit — only guards against absurd forces at extreme
+// boost speeds. Must stay far above the stall-peak lift at normal speeds.
+const LIFT_SAFETY_MAX = 30;
+const AOA_MIN_SPEED = 0.5;
 // Lateral (body-X) drag — sideways sliding costs far more than moving forward.
 const DRAG_SIDE_LINEAR = 1.2;
 const DRAG_SIDE_QUADRATIC = 0.022;
@@ -40,6 +63,10 @@ const MUSTANG_MATERIAL = new THREE.MeshStandardMaterial({
   roughness: 0.18,
   envMapIntensity: 1.4,
 });
+
+function attachedLiftCoefficient(aoa) {
+  return CL_ZERO + CL_SLOPE * THREE.MathUtils.clamp(aoa, -STALL_AOA, STALL_AOA);
+}
 
 let sharedLoader = null;
 function getLoader() {
@@ -97,6 +124,7 @@ export function createAirplane(scene, options = {}) {
 
   const velocity = new THREE.Vector3();
   let throttle = INITIAL_THROTTLE;
+  let stalled = false;
   let crashed = false;
   let crashedAt = 0;
   let toastEl = null;
@@ -126,6 +154,8 @@ export function createAirplane(scene, options = {}) {
   const velHoriz = new THREE.Vector3();
   const crossTmp = new THREE.Vector3();
   const accel = new THREE.Vector3();
+  const velDirBody = new THREE.Vector3();
+  const invQuat = new THREE.Quaternion();
   const rotDelta = new THREE.Quaternion();
   const pitchAxis = new THREE.Vector3(1, 0, 0);
   const yawAxis = new THREE.Vector3(0, 1, 0);
@@ -145,6 +175,7 @@ export function createAirplane(scene, options = {}) {
     plane.quaternion.copy(RESPAWN_QUATERNION);
     velocity.set(0, 0, 0);
     throttle = INITIAL_THROTTLE;
+    stalled = false;
     plane.visible = true;
     crashed = false;
     setToast('');
@@ -191,8 +222,33 @@ export function createAirplane(scene, options = {}) {
       dragVec.copy(velocity).multiplyScalar(-(DRAG_LINEAR + DRAG_QUADRATIC * speed));
 
       bodyUp.set(0, 1, 0).applyQuaternion(plane.quaternion);
-      const liftMag = Math.min(LIFT_COEFF * speed * speed, LIFT_MAX);
+      // Angle of attack in the pitch plane: rotate velocity into body space
+      // (nose-forward is -Z); positive AoA = air meeting the wing from below.
+      let aoa = 0;
+      if (speed > AOA_MIN_SPEED) {
+        invQuat.copy(plane.quaternion).invert();
+        velDirBody.copy(velocity).multiplyScalar(1 / speed).applyQuaternion(invQuat);
+        aoa = -Math.atan2(velDirBody.y, -velDirBody.z);
+      }
+      if (!stalled && Math.abs(aoa) > STALL_AOA) stalled = true;
+      else if (stalled && Math.abs(aoa) < REATTACH_AOA) stalled = false;
+
+      const cl = stalled ? Math.sign(aoa) * STALL_CL_BROKEN : attachedLiftCoefficient(aoa);
+      const liftMag = THREE.MathUtils.clamp(
+        LIFT_COEFF * speed * speed * cl,
+        -LIFT_SAFETY_MAX,
+        LIFT_SAFETY_MAX,
+      );
       liftVec.copy(bodyUp).multiplyScalar(liftMag);
+
+      // Stalled wing: the nose gets pulled toward the velocity vector.
+      if (stalled && speed > AOA_MIN_SPEED) {
+        const depth = Math.abs(aoa) - REATTACH_AOA;
+        const pitchStep =
+          -Math.sign(aoa) * STALL_PITCH_RATE * THREE.MathUtils.clamp(depth / STALL_PITCH_RAMP, 0, 1) * dt;
+        rotDelta.setFromAxisAngle(pitchAxis, pitchStep);
+        plane.quaternion.multiply(rotDelta);
+      }
 
       const lateralSpeed = velocity.dot(bodyRightVec);
       const lateralMag = -(DRAG_SIDE_LINEAR + DRAG_SIDE_QUADRATIC * Math.abs(lateralSpeed)) * lateralSpeed;
