@@ -22,7 +22,18 @@ const FLASH_MATERIAL_TEMPLATE = {
 };
 const CYLINDER_UP = new THREE.Vector3(0, 1, 0);
 
-export function createGuns(scene, airplane, camera) {
+const SPARK_MAX = 24;
+const SPARK_TTL = 0.15;
+const SPARK_GEOMETRY = new THREE.PlaneGeometry(1.6, 1.6);
+const SPARK_MATERIAL_TEMPLATE = {
+  color: 0xffc766,
+  transparent: true,
+  opacity: 0,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+};
+
+export function createGuns(scene, airplane, camera, collision) {
   const bullets = new Array(BULLET_MAX);
   for (let i = 0; i < BULLET_MAX; i++) {
     const mesh = new THREE.Mesh(BULLET_GEOMETRY, BULLET_MATERIAL);
@@ -52,9 +63,22 @@ export function createGuns(scene, airplane, camera) {
   airplane.mesh.add(flashLeft);
   airplane.mesh.add(flashRight);
 
+  // Impact sparks — pooled billboards that flare and shrink over SPARK_TTL.
+  const sparks = new Array(SPARK_MAX);
+  for (let i = 0; i < SPARK_MAX; i++) {
+    const material = new THREE.MeshBasicMaterial(SPARK_MATERIAL_TEMPLATE);
+    const mesh = new THREE.Mesh(SPARK_GEOMETRY, material);
+    mesh.renderOrder = 3;
+    mesh.visible = false;
+    scene.add(mesh);
+    sparks[i] = { mesh, material, ttl: 0, active: false };
+  }
+  let nextSparkIdx = 0;
+
   let active = false;
   let fireTimer = 0;
 
+  const prevPosTmp = new THREE.Vector3();
   const worldPosTmp = new THREE.Vector3();
   const worldVelTmp = new THREE.Vector3();
   const noseDirTmp = new THREE.Vector3();
@@ -82,24 +106,62 @@ export function createGuns(scene, airplane, camera) {
     }
   }
 
+  // update() refreshes cameraWorldPos once per frame before any billboarding.
   function billboardFlash(flash) {
-    camera.getWorldPosition(cameraWorldPos);
     flash.lookAt(cameraWorldPos);
+  }
+
+  function spawnSpark(point) {
+    const s = sparks[nextSparkIdx];
+    nextSparkIdx = (nextSparkIdx + 1) % SPARK_MAX;
+    s.active = true;
+    s.ttl = SPARK_TTL;
+    s.mesh.position.set(point.x, point.y, point.z);
+    s.mesh.scale.setScalar(1);
+    s.material.opacity = 1;
+    s.mesh.visible = true;
   }
 
   return {
     update(dt, input) {
+      camera.getWorldPosition(cameraWorldPos);
+
       for (let i = 0; i < BULLET_MAX; i++) {
         const b = bullets[i];
         if (!b.active) continue;
+        prevPosTmp.copy(b.mesh.position);
         bulletStepTmp.copy(b.velocity).multiplyScalar(dt);
         b.mesh.position.add(bulletStepTmp);
         b.dist += bulletStepTmp.length();
         b.ttl -= dt;
+        if (collision) {
+          const hit = collision.checkSegment(prevPosTmp, b.mesh.position);
+          if (hit) {
+            spawnSpark(hit.point);
+            b.active = false;
+            b.mesh.visible = false;
+            continue;
+          }
+        }
         if (b.ttl <= 0 || b.dist >= BULLET_MAX_DIST) {
           b.active = false;
           b.mesh.visible = false;
         }
+      }
+
+      for (let i = 0; i < SPARK_MAX; i++) {
+        const s = sparks[i];
+        if (!s.active) continue;
+        s.ttl -= dt;
+        if (s.ttl <= 0) {
+          s.active = false;
+          s.mesh.visible = false;
+          continue;
+        }
+        const life = s.ttl / SPARK_TTL;
+        s.material.opacity = life;
+        s.mesh.scale.setScalar(1 + (1 - life) * 1.5);
+        s.mesh.lookAt(cameraWorldPos);
       }
 
       if (flashLeftMaterial.opacity > 0) {
@@ -158,12 +220,23 @@ export function createGuns(scene, airplane, camera) {
             b.mesh.visible = false;
           }
         }
+        for (let i = 0; i < SPARK_MAX; i++) {
+          const s = sparks[i];
+          if (s.active) {
+            s.active = false;
+            s.mesh.visible = false;
+          }
+        }
       }
     },
 
     dispose() {
       for (let i = 0; i < BULLET_MAX; i++) {
         scene.remove(bullets[i].mesh);
+      }
+      for (let i = 0; i < SPARK_MAX; i++) {
+        scene.remove(sparks[i].mesh);
+        sparks[i].material.dispose();
       }
       airplane.mesh.remove(flashLeft);
       airplane.mesh.remove(flashRight);
