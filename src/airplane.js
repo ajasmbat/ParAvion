@@ -165,7 +165,6 @@ export function createAirplane(scene, options = {}) {
   const invQuat = new THREE.Quaternion();
   const accel = new THREE.Vector3();
   const velDirBody = new THREE.Vector3();
-  const invQuat = new THREE.Quaternion();
   const rotDelta = new THREE.Quaternion();
   const pitchAxis = new THREE.Vector3(1, 0, 0);
   const yawAxis = new THREE.Vector3(0, 1, 0);

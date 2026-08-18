@@ -32,6 +32,35 @@ const MAST_COLOR = 0x33343a;
 const TANK_COLOR = 0x6e4a38;
 const AC_COLOR = 0x94969c;
 
+// Ground detail. The ground stays ONE mesh; the street grid is painted once
+// into a CanvasTexture covering the whole city (~1 px per metre) rather than
+// spawning geometry per street. Colours are authored in sRGB hex strings.
+const GROUND_TEX_SIZE = 2048;
+const ASPHALT_COLOR = '#1b1c1f'; // avenues + intersections
+const ALLEY_COLOR = '#181819'; // service alleys — plain, unmarked
+const SIDEWALK_COLOR = '#4a4b50'; // curb rim around each block
+const LOT_COLOR = '#35363a'; // block interior (pavement / building footprints)
+const PARK_COLOR = '#2c4526';
+const TREE_COLOR = '#1e3419';
+const LANE_COLOR = '#c8b46a'; // weathered centre-line paint
+const SIDEWALK_WIDTH = 3;
+const LANE_WIDTH = 1.4;
+const LANE_DASH = 6;
+const LANE_GAP = 6;
+
+// Streetlights: two InstancedMeshes (pole + emissive head) lining both curbs of
+// every avenue. Two per block face — 30 m apart inside a block, 50 m across the
+// intersection — which averages the ~40 m spacing without dropping a lamp in
+// the middle of a junction.
+const LAMP_COLOR = 0xffd08a;
+const POLE_COLOR = 0x27282c;
+const POLE_HEIGHT = 7;
+const POLE_RADIUS = 0.16;
+const LAMP_RADIUS = 0.55;
+const LAMP_OVERHANG = 1.3; // head cantilevered out over the roadway
+const LAMP_CURB_INSET = 1.5; // metres in from the block edge
+const LAMP_BLOCK_OFFSETS = [15, 45];
+
 const GROUND_COLOR = 0x2a2a2a;
 const BASE_COLOR = [0.784, 0.784, 0.784]; // ~#c8c8c8
 const COLOR_JITTER = 0.15;
@@ -51,10 +80,12 @@ const WINDOW_INTENSITY = 0.75;
 /**
  * Generate a deterministic 2km x 2km procedural city as a single InstancedMesh
  * plus a few rooftop-detail InstancedMeshes.
- * Returns `{ mesh, detailMeshes, buildings, ground }` — `ground` is a separate
- * mesh so main.js can add it independently, `detailMeshes` is an array of
- * InstancedMeshes to add alongside. `buildings` stays a flat list of
- * axis-aligned `{ min, max }` AABBs (one per tier) for the collision system.
+ * Returns `{ mesh, detailMeshes, buildings, ground, streetMeshes }` — `ground`
+ * is a separate mesh so main.js can add it independently, `detailMeshes` and
+ * `streetMeshes` (streetlight poles + heads) are arrays of InstancedMeshes to
+ * add alongside. `buildings` stays a flat list of axis-aligned `{ min, max }`
+ * AABBs (one per tier) for the collision system; ground detail is visual only,
+ * so nothing here is collidable and the ground plane stays at y = 0.
  * @param {number} seed
  */
 export function generateCity(seed) {
@@ -66,6 +97,11 @@ export function generateCity(seed) {
   // Pass 1 — lot layout. Draw order on `rand` is unchanged from the original
   // single-box generator so the same seed keeps the same street layout.
   const sites = [];
+  // Ground-painting inputs, recorded as the layout is walked: `blocks` carries
+  // the alley orientation, `parks` the lots the skip branch below left empty.
+  // Re-deriving either with a second pass over `rand` would desync the stream.
+  const blocks = [];
+  const parks = [];
 
   for (let row = 0; row < blocksPerSide; row++) {
     for (let col = 0; col < blocksPerSide; col++) {
@@ -74,6 +110,7 @@ export function generateCity(seed) {
 
       // Alternate alley orientation per block for a bit of variety.
       const alleyRunsX = ((row + col) & 1) === 0;
+      blocks.push({ x0: bx, z0: bz, alleyRunsX });
 
       const lots = alleyRunsX
         ? [
@@ -87,7 +124,10 @@ export function generateCity(seed) {
 
       for (const lot of lots) {
         // Occasionally skip a lot for visual variety (small parks / gaps).
-        if (rand() < 0.08) continue;
+        if (rand() < 0.08) {
+          parks.push(lot);
+          continue;
+        }
 
         const maxW = Math.min(BUILDING_MAX_DIM, lot.w);
         const maxD = Math.min(BUILDING_MAX_DIM, lot.d);
@@ -255,13 +295,233 @@ export function generateCity(seed) {
   for (let i = 0; i < buildings.length; i++) windowSeeds[i] = seedRand();
   geometry.setAttribute('aWindowSeed', new THREE.InstancedBufferAttribute(windowSeeds, 1));
 
+  // Street grid + lamps. Lamp placement is pure geometry, so it is derived
+  // first and fed back into the paint pass as glow pools on the asphalt —
+  // that is what makes the light strings legible from cruising altitude.
+  const lamps = layOutStreetlights(blocksPerSide, halfCity);
+
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(CITY_SIZE, CITY_SIZE),
-    new THREE.MeshLambertMaterial({ color: GROUND_COLOR }),
+    new THREE.MeshLambertMaterial({
+      color: GROUND_COLOR,
+      map: paintGroundTexture(seed, blocks, parks, lamps),
+    }),
   );
+  // A painted ground modulates the map by `color`; an unpainted one keeps the
+  // original flat GROUND_COLOR.
+  if (ground.material.map) ground.material.color.setHex(0xffffff);
   ground.rotation.x = -Math.PI / 2;
 
-  return { mesh, detailMeshes: buildDetailMeshes(masts, tanks, acs), buildings, ground };
+  return {
+    mesh,
+    detailMeshes: buildDetailMeshes(masts, tanks, acs),
+    buildings,
+    ground,
+    streetMeshes: buildStreetlightMeshes(lamps),
+  };
+}
+
+/**
+ * Streetlight positions along both curbs of every avenue. Returns
+ * `{ x, z, dx, dz }` per lamp — position at the pole base, plus the unit
+ * direction toward the roadway that the head is cantilevered over.
+ * Fully deterministic from the grid; consumes no PRNG.
+ */
+function layOutStreetlights(blocksPerSide, halfCity) {
+  const lamps = [];
+
+  const runAvenue = (alongZ) => {
+    for (let a = 0; a < blocksPerSide; a++) {
+      // The avenue between block `a` and block `a + 1`.
+      const near = -halfCity + a * PERIOD + BLOCK_SIZE; // roadway edge, low side
+      const far = near + AVENUE; // roadway edge, high side
+      const curbs = [{ at: near - LAMP_CURB_INSET, dir: 1 }];
+      // The final avenue has no block beyond it to carry the far curb.
+      if (a + 1 < blocksPerSide) curbs.push({ at: far + LAMP_CURB_INSET, dir: -1 });
+
+      for (const curb of curbs) {
+        for (let b = 0; b < blocksPerSide; b++) {
+          const blockStart = -halfCity + b * PERIOD;
+          for (const offset of LAMP_BLOCK_OFFSETS) {
+            const along = blockStart + offset;
+            lamps.push(
+              alongZ
+                ? { x: curb.at, z: along, dx: curb.dir, dz: 0 }
+                : { x: along, z: curb.at, dx: 0, dz: curb.dir },
+            );
+          }
+        }
+      }
+    }
+  };
+
+  runAvenue(true); // avenues running north–south (lamps stepped along z)
+  runAvenue(false); // avenues running east–west (lamps stepped along x)
+  return lamps;
+}
+
+/**
+ * One InstancedMesh of pole cylinders + one of emissive lamp heads. The heads
+ * are MeshBasicMaterial so they read as light sources without any real
+ * THREE.PointLight — thousands of those would tank the frame rate — and still
+ * fade into the scene fog at distance.
+ */
+function buildStreetlightMeshes(lamps) {
+  if (lamps.length === 0) return [];
+
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const scale = new THREE.Vector3(1, 1, 1);
+  const quat = new THREE.Quaternion();
+
+  const poleGeometry = new THREE.CylinderGeometry(POLE_RADIUS * 0.7, POLE_RADIUS, POLE_HEIGHT, 5);
+  poleGeometry.translate(0, POLE_HEIGHT / 2, 0);
+  const poles = new THREE.InstancedMesh(
+    poleGeometry,
+    new THREE.MeshLambertMaterial({ color: POLE_COLOR }),
+    lamps.length,
+  );
+
+  const heads = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(LAMP_RADIUS, 6, 4),
+    new THREE.MeshBasicMaterial({ color: LAMP_COLOR }),
+    lamps.length,
+  );
+
+  for (let i = 0; i < lamps.length; i++) {
+    const lamp = lamps[i];
+    position.set(lamp.x, 0, lamp.z);
+    matrix.compose(position, quat, scale);
+    poles.setMatrixAt(i, matrix);
+
+    position.set(lamp.x + lamp.dx * LAMP_OVERHANG, POLE_HEIGHT, lamp.z + lamp.dz * LAMP_OVERHANG);
+    matrix.compose(position, quat, scale);
+    heads.setMatrixAt(i, matrix);
+  }
+  poles.instanceMatrix.needsUpdate = true;
+  heads.instanceMatrix.needsUpdate = true;
+
+  return [poles, heads];
+}
+
+/**
+ * Paint the whole 2km street grid into one CanvasTexture at ~1 px/metre:
+ * asphalt avenues with dashed centre-lines, lighter block pavement with a
+ * sidewalk curb rim, dark alley strips, and green parks on the skipped lots.
+ * Returns null in a non-DOM environment (node physics tests import this
+ * module), leaving the ground on its flat fallback colour.
+ */
+function paintGroundTexture(seed, blocks, parks, lamps) {
+  if (typeof document === 'undefined') return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = GROUND_TEX_SIZE;
+  canvas.height = GROUND_TEX_SIZE;
+  const ctx = canvas.getContext('2d');
+
+  const half = CITY_SIZE / 2;
+  const scale = GROUND_TEX_SIZE / CITY_SIZE; // px per metre
+  // World X -> canvas X and world Z -> canvas Y are the same increasing map:
+  // the plane is rotated -90 deg about X and the texture is flipY, and the two
+  // inversions cancel.
+  const at = (v) => (v + half) * scale;
+  const box = (x, z, w, d, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(at(x), at(z), w * scale, d * scale);
+  };
+
+  // Roadway everywhere, then blocks stamped back on top of it.
+  box(-half, -half, CITY_SIZE, CITY_SIZE, ASPHALT_COLOR);
+
+  for (const block of blocks) {
+    box(block.x0, block.z0, BLOCK_SIZE, BLOCK_SIZE, SIDEWALK_COLOR);
+    box(
+      block.x0 + SIDEWALK_WIDTH,
+      block.z0 + SIDEWALK_WIDTH,
+      BLOCK_SIZE - SIDEWALK_WIDTH * 2,
+      BLOCK_SIZE - SIDEWALK_WIDTH * 2,
+      LOT_COLOR,
+    );
+    // The alley cuts the full depth of the block so its mouths open onto the
+    // avenues at both ends.
+    if (block.alleyRunsX) {
+      box(block.x0, block.z0 + LOT_DEPTH, BLOCK_SIZE, ALLEY, ALLEY_COLOR);
+    } else {
+      box(block.x0 + LOT_DEPTH, block.z0, ALLEY, BLOCK_SIZE, ALLEY_COLOR);
+    }
+  }
+
+  // Parks sit on the lots the layout pass skipped, inset so the block keeps its
+  // sidewalk rim. Tree canopies come from an independent stream so they cannot
+  // perturb the building sequence.
+  const groundRand = mulberry32((seed + 0x27d4eb2f) | 0);
+  for (const park of parks) {
+    const x = park.x0 + SIDEWALK_WIDTH;
+    const z = park.z0 + SIDEWALK_WIDTH;
+    const w = park.w - SIDEWALK_WIDTH * 2;
+    const d = park.d - SIDEWALK_WIDTH * 2;
+    box(x, z, w, d, PARK_COLOR);
+
+    ctx.fillStyle = TREE_COLOR;
+    const trees = 3 + Math.floor(groundRand() * 4);
+    for (let i = 0; i < trees; i++) {
+      const r = 2.2 + groundRand() * 1.4;
+      const tx = x + r + groundRand() * Math.max(0, w - r * 2);
+      const tz = z + r + groundRand() * Math.max(0, d - r * 2);
+      ctx.beginPath();
+      ctx.arc(at(tx), at(tz), r * scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Dashed centre-lines, drawn per block span so no dash lands in a junction.
+  const blocksPerSide = Math.floor(CITY_SIZE / PERIOD);
+  const dashes = Math.floor(BLOCK_SIZE / (LANE_DASH + LANE_GAP));
+  const dashStart = (BLOCK_SIZE - (dashes * (LANE_DASH + LANE_GAP) - LANE_GAP)) / 2;
+  for (let a = 0; a < blocksPerSide; a++) {
+    const center = -half + a * PERIOD + BLOCK_SIZE + AVENUE / 2 - LANE_WIDTH / 2;
+    for (let b = 0; b < blocksPerSide; b++) {
+      const spanStart = -half + b * PERIOD + dashStart;
+      for (let i = 0; i < dashes; i++) {
+        const along = spanStart + i * (LANE_DASH + LANE_GAP);
+        box(center, along, LANE_WIDTH, LANE_DASH, LANE_COLOR);
+        box(along, center, LANE_DASH, LANE_WIDTH, LANE_COLOR);
+      }
+    }
+  }
+
+  // Warm pools under the lamps. One pre-rendered sprite blitted per lamp keeps
+  // this to a single gradient build instead of a few thousand.
+  const glow = makeGlowSprite();
+  const glowSize = 13 * scale;
+  ctx.globalCompositeOperation = 'lighter';
+  for (const lamp of lamps) {
+    const gx = at(lamp.x + lamp.dx * LAMP_OVERHANG) - glowSize / 2;
+    const gz = at(lamp.z + lamp.dz * LAMP_OVERHANG) - glowSize / 2;
+    ctx.drawImage(glow, gx, gz, glowSize, glowSize);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8; // clamped to the device max on upload
+  return texture;
+}
+
+/** A single soft radial falloff, reused for every lamp's ground pool. */
+function makeGlowSprite() {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, 'rgba(150, 116, 62, 1)');
+  gradient.addColorStop(0.45, 'rgba(86, 66, 34, 0.55)');
+  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  return canvas;
 }
 
 /**
